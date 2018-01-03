@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"os"
+	"time"
 )
 
 // OverlayContext overlays a build.Context with additional files from
@@ -54,7 +56,83 @@ func OverlayContext(orig *build.Context, overlay map[string][]byte) *build.Conte
 
 		return OpenFile(orig, path)
 	}
+	ctxt.IsDir = func(path string) bool {
+		if IsDir(orig, path) {
+			return true
+		}
+
+		for filename, _ := range overlay {
+			if _, ok := hasSubdir(path, filepath.Dir(filename)); ok {
+				return true
+			}
+		}
+		return false
+	}
+	ctxt.HasSubdir = func(root, dir string) (rel string, ok bool) {
+		if rel, ok = HasSubdir(orig, root, dir); ok {
+			return
+		}
+		return "", false
+	}
+	ctxt.ReadDir = func(dir string) (fis []os.FileInfo, err error) {
+		fis, err = ReadDir(orig, dir)
+		if err != nil {
+			return
+		}
+		for filename, bytes := range overlay {
+			if rel, ok := hasSubdir(dir, filename); ok {
+				idx := strings.IndexRune(rel, filepath.Separator)
+				if idx < 0 { // file
+					fis = append(fis, &fileinfo {
+						name: rel,
+						size: int64(len(bytes)),
+						dir: false,
+						mode: 0644,
+					})
+				} else { // dir
+					fis = append(fis, &fileinfo {
+						name: rel[:idx],
+						dir: true,
+						mode: 0755,
+					})
+				}
+			}
+		}
+		return
+	}
 	return ctxt
+}
+
+type fileinfo struct {
+	name string
+	size int64
+	mode os.FileMode
+	time time.Time
+	dir  bool
+}
+
+func (fi *fileinfo) Name() string {
+	return fi.name
+}
+
+func (fi *fileinfo) Size() int64 {
+	return fi.size
+}
+
+func (fi *fileinfo) Mode() os.FileMode {
+	return fi.mode
+}
+
+func (fi *fileinfo) ModTime() time.Time {
+	return fi.time
+}
+
+func (fi *fileinfo) IsDir() bool {
+	return fi.dir
+}
+
+func (fi *fileinfo) Sys() interface{} {
+	return nil
 }
 
 // ParseOverlayArchive parses an archive containing Go files and their
